@@ -1,0 +1,7 @@
+psutil
+langchain-community
+langchain-text-splitters
+langchain-core
+llama-cpp-python
+sentence-transformers
+faiss-cpu
