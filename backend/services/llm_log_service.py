@@ -6,7 +6,7 @@ from llama_cpp import Llama
 from sentence_transformers import SentenceTransformer
 
 
-MODEL_PATH = "/Users/ashishchaudhary/Persoanl/project/PipelineX/models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+MODEL_PATH = "/Users/ashishchaudhary/Persoanl/project/pipelinex/backend/models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
 LLM_CTX = 4096  # context window
 LLM = None
 EMBEDDER = None
@@ -98,7 +98,7 @@ LOG SNIPPET:
 """
 
     # Step 5: Generate summary
-    response = llm(prompt, max_tokens=1024, temperature=0.3, stop=["</s>", "[INST]"])
+    response = llm(prompt, max_tokens=1024, temperature=0.5, stop=["</s>", "[INST]"])
     summary = response["choices"][0]["text"].strip()
 
     return {"summary": summary, "chunk_count": len(chunks)}

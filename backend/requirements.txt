@@ -5,3 +5,6 @@ langchain-core
 llama-cpp-python
 sentence-transformers
 faiss-cpu
+fastapi
+uvicorn
+python-gitlab

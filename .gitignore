@@ -1,4 +1,7 @@
 backend/venv
 backend/models
+backend/__pycache__
+backend/routes/__pycache__
+backend/services/__pycache__
 frontend/node_moduels
 backend/.idea
