@@ -35,22 +35,138 @@ import { Pipeline } from '../models/gitlab';
   </section>
   `,
   styles: [`
-    .pipelines { padding:18px; }
-    .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
-    .title { font-size:18px; font-weight:700; color:#eaf4ff; }
-    .meta { color:#9fb7d6; font-size:13px; }
-    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:12px; }
-    .card { background: linear-gradient(180deg,#071826,#02121a); border-radius:10px; padding:12px; cursor:pointer; border:1px solid rgba(255,255,255,0.02); transition:transform .12s ease, box-shadow .12s ease; }
-    .card:hover { transform: translateY(-6px); box-shadow: 0 10px 30px rgba(0,0,0,0.6); }
-    .card-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
-    .id { color:#8fb7d6; font-weight:700; }
-    .status { padding:6px 8px; border-radius:8px; font-weight:700; font-size:12px; text-transform:capitalize; }
-    .status.success { background:#e7f9ee; color:#0a7b3b; }
-    .status.failed { background:#fdecec; color:#a12a2a; }
-    .status.running { background:#fff7e6; color:#a46e00; }
-    .card-body { color:#b7d7ef; display:flex; justify-content:space-between; font-size:13px; }
-    .card-foot { margin-top:12px; display:flex; justify-content:flex-end; }
-    .small-btn { background:transparent; border:1px solid rgba(255,255,255,0.06); color:#9fb7d6; padding:6px 10px; border-radius:8px; cursor:pointer; }
+    .pipelines { 
+      height: 100%; 
+      display: flex; 
+      flex-direction: column; 
+      overflow: hidden; 
+    }
+    
+    .header { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      margin-bottom: 16px;
+      flex-shrink: 0;
+    }
+    
+    .title { 
+      font-size: 16px; 
+      font-weight: 700; 
+      color: #eaf4ff; 
+    }
+    
+    .meta { 
+      color: #9fb7d6; 
+      font-size: 12px; 
+    }
+    
+    .grid { 
+      display: flex; 
+      flex-direction: column; 
+      gap: 10px; 
+      overflow-y: auto; 
+      flex: 1;
+      padding-right: 4px;
+    }
+    
+    .card { 
+      background: linear-gradient(180deg, #071826, #02121a); 
+      border-radius: 10px; 
+      padding: 12px; 
+      cursor: pointer; 
+      border: 1px solid rgba(255,255,255,0.04); 
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+    
+    .card:hover { 
+      transform: translateX(-4px); 
+      box-shadow: 0 8px 25px rgba(0,0,0,0.4);
+      border-color: rgba(31,111,235,0.3);
+    }
+    
+    .card-top { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      margin-bottom: 8px; 
+    }
+    
+    .id { 
+      color: #8fb7d6; 
+      font-weight: 700; 
+      font-size: 14px;
+    }
+    
+    .status { 
+      padding: 4px 8px; 
+      border-radius: 6px; 
+      font-weight: 600; 
+      font-size: 11px; 
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .status.success { 
+      background: #e7f9ee; 
+      color: #0a7b3b; 
+    }
+    
+    .status.failed { 
+      background: #fdecec; 
+      color: #a12a2a; 
+    }
+    
+    .status.running { 
+      background: #fff7e6; 
+      color: #a46e00; 
+    }
+    
+    .card-body { 
+      color: #b7d7ef; 
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    
+    .ref {
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    
+    .sha {
+      color: #95b0cc;
+      font-family: monospace;
+    }
+    
+    .card-foot { 
+      display: flex; 
+      justify-content: flex-end; 
+    }
+    
+    .small-btn { 
+      background: transparent; 
+      border: 1px solid rgba(255,255,255,0.08); 
+      color: #9fb7d6; 
+      padding: 4px 8px; 
+      border-radius: 6px; 
+      cursor: pointer; 
+      font-size: 11px;
+      transition: all 0.2s ease;
+    }
+    
+    .small-btn:hover {
+      background: rgba(31,111,235,0.1);
+      border-color: rgba(31,111,235,0.4);
+      color: #eaf4ff;
+    }
+    
+    .muted { 
+      color: #8faac6; 
+      font-size: 13px; 
+      padding: 20px; 
+      text-align: center; 
+    }
   `]
 })
 export class PipelinesGridComponent implements OnInit {

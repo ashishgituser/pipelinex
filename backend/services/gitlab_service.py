@@ -1,5 +1,5 @@
 from config import get_gitlab_client
-from services.llm_log_service import summarize_logs_with_llm
+from services.llm_log_service import summarize_logs_with_llm, stream_summarize_logs_with_llm
 
 
 # ---- Existing ----
@@ -17,7 +17,7 @@ def get_projects(group_id: int):
 def get_pipelines(project_id: int):
     gl = get_gitlab_client()
     project = gl.projects.get(project_id)
-    pipelines = project.pipelines.list(all=True)
+    pipelines = project.pipelines.list(per_page=10, page=1, order_by='id', sort='desc')
     return [
         {"id": p.id, "status": p.status, "ref": p.ref, "sha": p.sha}
         for p in pipelines
@@ -67,3 +67,28 @@ def get_stage_log(project_id: int, job_id: int):
     log_text = ensure_text(raw_log)
     summary_result = summarize_logs_with_llm(raw_log)
     return summary_result
+
+
+def stream_stage_log_summary(project_id: int, job_id: int):
+    """Stream the log summary generation token by token."""
+    import json
+    
+    gl = get_gitlab_client()
+    project = gl.projects.get(project_id)
+    job = project.jobs.get(job_id)
+    raw_log = job.trace()
+
+    if not raw_log or len(raw_log.strip()) == 0:
+        yield json.dumps({"type": "complete", "summary": "No logs found for this job."})
+        return
+
+    # Generate streaming AI summary
+    log_text = ensure_text(raw_log)
+    
+    yield json.dumps({"type": "status", "message": "Processing logs..."})
+    
+    # Stream the summary generation
+    for token in stream_summarize_logs_with_llm(raw_log):
+        yield json.dumps({"type": "token", "content": token})
+    
+    yield json.dumps({"type": "complete", "message": "Summary generation complete"})
