@@ -19,42 +19,37 @@ import { StreamingLogComponent } from './components/streaming-log-viewer.compone
   ],
   template: `
   <div class="app-shell">
-    <!-- Left Column: Groups & Projects -->
+    <!-- Left Sidebar -->
     <aside class="left-column">
       <app-groups-sidebar></app-groups-sidebar>
     </aside>
 
-    <!-- Middle Column: Stages & Log Summary -->
+    <!-- Middle Column -->
     <main class="middle-column">
       <div class="top-row">
-        <div class="breadcrumbs">Dashboard / Stages & Logs</div>
+        <div class="breadcrumbs">Dashboard / Log Summary</div>
         <div class="spacer"></div>
-        <div class="controls">
-          <button class="ghost">⟳ Refresh</button>
-        </div>
+        <button class="ghost">⟳ Refresh</button>
       </div>
 
       <div class="middle-content">
-        <div class="stages-section">
-          <app-stages-panel></app-stages-panel>
-        </div>
-        
         <div class="logs-summary-section">
           <app-streaming-log></app-streaming-log>
+        </div>
+
+        <div class="stages-section">
+          <app-stages-panel></app-stages-panel>
         </div>
       </div>
     </main>
 
-    <!-- Right Column: Pipelines Grid -->
+    <!-- Right Sidebar -->
     <aside class="right-column">
       <div class="top-row">
         <div class="breadcrumbs">Pipelines</div>
         <div class="spacer"></div>
-        <div class="controls">
-          <button class="ghost">Filter</button>
-        </div>
+        <button class="ghost">Filter</button>
       </div>
-      
       <div class="pipelines-section">
         <app-pipelines-grid></app-pipelines-grid>
       </div>
@@ -62,101 +57,131 @@ import { StreamingLogComponent } from './components/streaming-log-viewer.compone
   </div>
   `,
   styles: [`
-    .app-shell { 
-      display: grid; 
-      grid-template-columns: 320px minmax(400px, 1fr) 360px; 
-      height: 100vh; 
-      background: linear-gradient(180deg,#04111a,#00101a); 
-      color: #d5eaf7; 
-      gap: 0;
-      min-width: 1080px;
+    /* --- LAYOUT GRID --- */
+    .app-shell {
+      display: grid;
+      grid-template-columns: 300px minmax(600px, 1fr) 340px;
+      height: 100vh;
+      background: radial-gradient(circle at top left, #06121c, #000e18);
+      color: #d8e7f9;
+      overflow: hidden;
     }
-    
-    .left-column { 
-      background: linear-gradient(180deg,#0f1724 0%, #08111a 100%);
+
+    /* --- LEFT COLUMN --- */
+    .left-column {
+      background: linear-gradient(180deg,#0b1a27 0%, #08121d 100%);
       border-right: 1px solid rgba(255,255,255,0.05);
     }
-    
-    .middle-column { 
-      display: flex; 
-      flex-direction: column; 
-      overflow: hidden;
-      padding: 18px;
-      border-right: 1px solid rgba(255,255,255,0.05);
+
+    /* --- RIGHT COLUMN --- */
+    .right-column {
+      display: flex;
+      flex-direction: column;
+      background: linear-gradient(180deg,#071620 0%, #020d15 100%);
+      border-left: 1px solid rgba(255,255,255,0.05);
+      padding: 16px;
     }
-    
-    .right-column { 
-      display: flex; 
-      flex-direction: column; 
-      overflow: hidden;
-      padding: 18px;
-      background: linear-gradient(180deg,#051218 0%, #020e15 100%);
-    }
-    
-    .middle-content {
-      flex: 1;
+
+    /* --- MIDDLE COLUMN --- */
+    .middle-column {
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      gap: 16px;
+      padding: 16px 20px;
     }
-    
+
+    .top-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      padding-bottom: 8px;
+    }
+
+    .breadcrumbs {
+      font-size: 15px;
+      font-weight: 600;
+      color: #99b7e2;
+      letter-spacing: 0.3px;
+    }
+
+    .spacer { flex: 1; }
+
+    .ghost {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #a7c8ee;
+      border-radius: 8px;
+      padding: 6px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .ghost:hover {
+      background: rgba(255,255,255,0.05);
+      border-color: rgba(255,255,255,0.2);
+      color: #fff;
+    }
+
+    /* --- MIDDLE CONTENT --- */
+    .middle-content {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      gap: 18px;
+      overflow: hidden;
+    }
+
+    /* Give logs more height priority */
+    .logs-summary-section {
+      flex: 0 0 65%;
+      background: rgba(255,255,255,0.02);
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.04);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Add a gradient top bar for visual polish */
+    .logs-summary-section::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 6px;
+      width: 100%;
+      background: linear-gradient(90deg,#00c6ff,#0072ff);
+      border-top-left-radius: 14px;
+      border-top-right-radius: 14px;
+    }
+
     .stages-section {
       flex: 1;
-      min-height: 300px;
-      overflow: hidden;
       background: rgba(255,255,255,0.01);
       border-radius: 12px;
       border: 1px solid rgba(255,255,255,0.03);
       box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-    }
-    
-    .logs-summary-section {
-      flex: 0 0 240px;
       overflow: hidden;
-      background: rgba(255,255,255,0.01);
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.03);
-      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
     }
-    
+
     .pipelines-section {
       flex: 1;
       overflow: auto;
     }
-    
-    .top-row { 
-      display: flex; 
-      gap: 12px; 
-      align-items: center; 
-      margin-bottom: 16px;
-      padding-bottom: 8px;
-      border-bottom: 1px solid rgba(255,255,255,0.05);
+
+    /* Scrollbar for logs and pipelines */
+    ::-webkit-scrollbar {
+      width: 8px;
     }
-    
-    .breadcrumbs { 
-      color: #9fb7d6; 
-      font-weight: 600; 
-      font-size: 14px;
+    ::-webkit-scrollbar-thumb {
+      background-color: rgba(255,255,255,0.15);
+      border-radius: 8px;
     }
-    
-    .spacer { flex: 1; }
-    
-    .ghost { 
-      background: transparent; 
-      border: 1px solid rgba(255,255,255,0.08); 
-      padding: 6px 12px; 
-      color: #9fb7d6; 
-      border-radius: 8px; 
-      cursor: pointer; 
-      transition: all 0.2s ease;
-      font-size: 13px;
-    }
-    
-    .ghost:hover {
-      background: rgba(255,255,255,0.05);
-      border-color: rgba(255,255,255,0.15);
-      color: #eaf4ff;
+    ::-webkit-scrollbar-thumb:hover {
+      background-color: rgba(255,255,255,0.3);
     }
   `]
 })

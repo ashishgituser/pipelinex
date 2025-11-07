@@ -1,27 +1,55 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from routes import gitlab_routes
+from flask import Flask, jsonify, Response, request
+from flask_cors import CORS
 
-app = FastAPI(title="GitLab DevOps Tool")
-
-# ✅ Allow requests from your Angular frontend
-origins = [
-    "http://localhost:4200",
-    "http://127.0.0.1:4200"
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,  # You can set ["*"] to allow all origins (not recommended for prod)
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+from services.gitlab_service import (
+    get_groups, get_projects, get_pipelines,
+    get_pipeline_stages, get_stage_log, stream_stage_log_summary
 )
 
-# ✅ Include your router as before
-app.include_router(gitlab_routes.router)
+app = Flask(__name__)
+
+# ✅ Enable CORS for all routes and origins
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+@app.route("/groups")
+def groups():
+    return jsonify(get_groups())
 
 
-@app.get("/")
-def root():
-    return {"message": "GitLab DevOps Tool Backend Running!"}
+@app.route("/projects/<int:group_id>")
+def projects(group_id):
+    return jsonify(get_projects(group_id))
+
+
+@app.route("/pipelines/<int:project_id>")
+def pipelines(project_id):
+    return jsonify(get_pipelines(project_id))
+
+
+@app.route("/stages/<int:project_id>/<int:pipeline_id>")
+def stages(project_id, pipeline_id):
+    return jsonify(get_pipeline_stages(project_id, pipeline_id))
+
+
+@app.route("/logs/<int:project_id>/<int:job_id>")
+def summarize_log(project_id, job_id):
+    return jsonify(get_stage_log(project_id, job_id))
+
+
+@app.route("/stream/<int:project_id>/<int:job_id>")
+def stream_log_summary(project_id, job_id):
+    def generate():
+        for chunk in stream_stage_log_summary(project_id, job_id):
+            yield f"data: {chunk}\n\n"
+    # ✅ Important: set headers for Server-Sent Events (SSE) + CORS
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+    }
+    return Response(generate(), headers=headers)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000, debug=True)

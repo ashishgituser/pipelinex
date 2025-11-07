@@ -23,10 +23,10 @@ export class GitlabService {
   }
 
   getPipelineStages(projectId: number, pipelineId: number): Observable<Record<string, Job[]>> {
-    return this.http.get<Record<string, Job[]>>(`${this.base}/pipelines/${projectId}/${pipelineId}/stages`);
+    return this.http.get<Record<string, Job[]>>(`${this.base}/stages/${projectId}/${pipelineId}`);
   }
 
   getJobLog(projectId: number, jobId: number): Observable<{ log: any }> {
-    return this.http.get<{ log: string }>(`${this.base}/pipelines/${projectId}/jobs/${jobId}/log`);
+    return this.http.get<{ log: string }>(`${this.base}/logs/${projectId}/${jobId}`);
   }
 }

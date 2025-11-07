@@ -33,7 +33,7 @@ export class StreamingLogService {
   streamLogSummaryWithEventSource(projectId: number, jobId: number): Observable<StreamingResponse> {
     const subject = new Subject<StreamingResponse>();
     
-    const url = `http://localhost:8000/gitlab/pipelines/${projectId}/jobs/${jobId}/log/stream`;
+    const url = `http://localhost:8000/stream/${projectId}/${jobId}`;
     
     console.log('🎯 Starting EventSource streaming from:', url);
     
@@ -144,7 +144,7 @@ export class StreamingLogService {
   streamLogSummaryWithFetch(projectId: number, jobId: number): Observable<StreamingResponse> {
     const subject = new Subject<StreamingResponse>();
     
-    const url = `http://localhost:8000/gitlab/pipelines/${projectId}/jobs/${jobId}/log/stream`;
+    const url = `http://localhost:8000/stream/${projectId}/${jobId}`;
     
     console.log('🚀 Starting SSE streaming from:', url);
     
@@ -271,7 +271,7 @@ export class StreamingLogService {
    * Test endpoint connectivity before streaming
    */
   testEndpoint(projectId: number, jobId: number): Promise<boolean> {
-    const url = `http://localhost:8000/gitlab/pipelines/${projectId}/jobs/${jobId}/log/stream`;
+    const url = `http://localhost:8000/stream/${projectId}/${jobId}`;
     
     console.log('🧪 TESTING ENDPOINT:', url);
     
@@ -297,7 +297,7 @@ export class StreamingLogService {
   streamLogSummaryRealTime(projectId: number, jobId: number): Observable<StreamingResponse> {
     const subject = new Subject<StreamingResponse>();
     
-    const url = `http://localhost:8000/gitlab/pipelines/${projectId}/jobs/${jobId}/log/stream`;
+    const url = `http://localhost:8000/stream/${projectId}/${jobId}`;
     
     console.log('🔥 AGGRESSIVE STREAMING from:', url);
     
