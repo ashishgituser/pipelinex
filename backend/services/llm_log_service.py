@@ -1,219 +1,113 @@
-import os
 import re
-from typing import List, Dict, Any
-
-from langchain_ollama import OllamaEmbeddings, OllamaLLM
+from langchain_ollama import OllamaLLM
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 
-# ==========================================================
-# CONFIGURATION
-# ==========================================================
-DB_DIR = "./chroma_log_db"
-MODEL_NAME = "qwen2.5:1.5b-instruct"
-EMBED_MODEL = "nomic-embed-text"
-
-# ==========================================================
-# INITIALIZE EMBEDDINGS + VECTOR STORE
-# ==========================================================
-embeddings = OllamaEmbeddings(model=EMBED_MODEL)
-
-if not os.path.exists(DB_DIR):
-    os.makedirs(DB_DIR)
+# Your existing configuration ------------------------------
 
 vector_store = Chroma(
     collection_name="gitlab_logs",
-    persist_directory=DB_DIR,
-    embedding_function=embeddings
+    persist_directory="./chroma_log_db",
+    embedding_function=None
 )
 
-# ==========================================================
-# INITIALIZE LLM
-# ==========================================================
-llm = OllamaLLM(model=MODEL_NAME)
+llm = OllamaLLM(model="qwen2.5:1.5b-instruct")
 
-# ==========================================================
-# STRUCTURED SUMMARY PROMPT
-# ==========================================================
-summary_prompt = ChatPromptTemplate.from_template("""
-You are a senior DevOps engineer. You will receive structured CI/CD job information extracted from raw logs.
+prompt = ChatPromptTemplate.from_template("""
+You are a senior DevOps engineer. Based on the extracted log events below,
+produce a clean and accurate summary:
 
-Use the fields below to create a highly accurate and concise final summary.
+EXTRACTED EVENTS:
+{events}
 
--------------------------
-🧩 LOG STRUCTURE (Preprocessed)
--------------------------
-
-📌 Head (Job Metadata):
-{head}
-
-❌ Errors:
-{errors}
-
-⚠️ Warnings:
-{warnings}
-
-🧨 Failed Commands:
-{failed_cmds}
-
-⏱ Timing Related Lines:
-{timings}
-
-📌 Tail (Last Output Lines):
-{tail}
-
--------------------------
-🎯 REQUIRED OUTPUT FORMAT
--------------------------
-
-🧱 Job Overview  
-(What job appears to be doing, general result)
-
-🚨 Issues & Root Cause  
-(Based on errors/warnings/failed commands)
-
-⚙️ What Happened (Short)  
-(High-level sequence of events)
-
-🔧 Recommended Fix  
-(Actionable suggestion)
-
-📘 One-Line Summary  
-(One clear sentence)
-
-Keep it concise, accurate, and readable. Do not repeat raw logs.
+Provide:
+- Job Overview
+- Errors & Warnings Summary
+- What Happened (short)
+- Root Cause
+- Recommended Fix
+- One-line Summary
 """)
 
-chain = summary_prompt | llm
-
-# ==========================================================
-# PATTERNS FOR EXTRACTION
-# ==========================================================
-ERROR_PATTERNS = [
-    r"error:",
-    r"fatal:",
-    r"failed",
-    r"exception",
-    r"traceback",
-    r"segfault",
-    r"oom",
-    r"panic",
-]
-
-WARNING_PATTERNS = [
-    r"warning",
-    r"warn:",
-    r"deprecated",
-]
-
-DURATION_PATTERN = r"\b\d+(\.\d+)?\s?(s|sec|secs|ms|milliseconds)\b"
+chain = prompt | llm
 
 
-# ==========================================================
-# STRUCTURED LOG EXTRACTOR
-# ==========================================================
-def extract_log_structure(raw: str) -> Dict[str, List[str]]:
-    """
-    This converts raw GitLab logs into a structured representation.
-    VERY fast, extremely accurate, and ideal for CPU LLMs.
-    """
+# ----------------------------------------------------------
+# 🔥 FAST “KEY EVENT EXTRACTOR” (Critical to speed)
+# ----------------------------------------------------------
+
+def extract_key_events(raw: str) -> str:
+    # Always convert bytes → str
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="ignore")
 
     lines = raw.splitlines()
 
-    head = lines[:30]                         # metadata region
-    tail = lines[-50:]                        # last events region
+    key = []
 
-    # Extract error lines
-    errors = []
+    # 1. First ~20 lines (metadata)
+    key.extend(lines[:20])
+
+    # 2. All error lines
     for ln in lines:
-        for p in ERROR_PATTERNS:
-            if re.search(p, ln, re.I):
-                errors.append(ln)
-                break
+        if re.search(r"(error|failed|exception|fatal|traceback|oom|panic)", ln, re.I):
+            key.append(ln)
 
-    # Extract warning lines
-    warnings = []
+    # 3. All warnings
     for ln in lines:
-        for p in WARNING_PATTERNS:
-            if re.search(p, ln, re.I):
-                warnings.append(ln)
-                break
+        if re.search(r"(warning|warn:)", ln, re.I):
+            key.append(ln)
 
-    # Extract duration lines
-    timings = [ln for ln in lines if re.search(DURATION_PATTERN, ln, re.I)]
+    # 4. Timing and slow steps
+    for ln in lines:
+        if re.search(r"\b\d+(\.\d+)?(s|ms|sec)\b", ln, re.I):
+            key.append(ln)
 
-    # Failed commands
-    failed_cmds = [ln for ln in lines if "exit code" in ln.lower()]
+    # 5. Last ~30 lines (end of job)
+    key.extend(lines[-30:])
 
-    # Limit noise
-    return {
-        "head": head,
-        "tail": tail,
-        "errors": errors[:80],
-        "warnings": warnings[:80],
-        "timings": timings[:80],
-        "failed_cmds": failed_cmds[:80],
-    }
+    # Keep only first 120 important lines max
+    key = key[:120]
+
+    extracted = "\n".join(key)
+
+    # LIMIT input to 2000 chars MAX → critical for speed
+    return extracted[:2000]
 
 
-# ==========================================================
-# MAIN SUMMARIZATION FUNCTION
-# ==========================================================
+# ----------------------------------------------------------
+# 🚀 MAIN FUNCTION — FASTEST POSSIBLE
+# ----------------------------------------------------------
+
 def summarize_logs_with_llm(raw_logs: str) -> dict:
-    """
-    FAST, accurate summarization of CI/CD logs.
-    This ALWAYS takes < 10 seconds on CPU.
-    (ONE LLM CALL ONLY)
-    """
-
     try:
-        # Convert bytes → string
-        if isinstance(raw_logs, bytes):
-            raw_logs = raw_logs.decode("utf-8", errors="ignore")
+        events = extract_key_events(raw_logs)
 
-        # Stage 1: Extract structured info (super fast)
-        structured = extract_log_structure(raw_logs)
-
-        # Stage 2: Store structured snippet in DB (small)
+        # Save small piece in vector db
         try:
-            vector_store.add_documents([Document(page_content=str(structured))])
+            vector_store.add_documents([Document(page_content=events)])
         except:
-            pass  # do not block main flow
+            pass
 
-        # Stage 3: ONE FINAL LLM CALL (fast!)
-        final_summary = chain.invoke(structured)
+        final = chain.invoke({"events": events})
 
-        return {
-            "summary": str(final_summary).strip(),
-            "structure": structured
-        }
+        return {"summary": final}
 
     except Exception as e:
         return {"error": str(e)}
 
 
-# ==========================================================
-# STREAMING VERSION (TOKEN BY TOKEN)
-# ==========================================================
+# ----------------------------------------------------------
+# 🚀 STREAM VERSION — ONLY FINAL SUMMARY
+# ----------------------------------------------------------
+
 def stream_summarize_logs_with_llm(raw_logs: str):
-    """
-    Streams FINAL summary only (no chunking, fast).
-    """
-
     try:
-        if isinstance(raw_logs, bytes):
-            raw_logs = raw_logs.decode("utf-8", errors="ignore")
+        events = extract_key_events(raw_logs)
 
-        structured = extract_log_structure(raw_logs)
-
-        try:
-            vector_store.add_documents([Document(page_content=str(structured))])
-        except:
-            pass
-
-        for token in llm.stream(summary_prompt.format(**structured)):
-            yield token
+        for t in llm.stream(prompt.format(events=events)):
+            yield t
 
     except Exception as e:
         yield f"[Error] {str(e)}"
