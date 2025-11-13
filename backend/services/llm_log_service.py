@@ -4,199 +4,223 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 
-from langchain_ollama import OllamaEmbeddings, OllamaLLM
-from langchain_chroma import Chroma
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.documents import Document
+# --- keep your existing imports for langchain_ollama, Chroma, Document, prompt, chain, llm etc.
+# from langchain_ollama import OllamaEmbeddings, OllamaLLM
+# from langchain_chroma import Chroma
+# from langchain_core.prompts import ChatPromptTemplate
+# from langchain_core.documents import Document
+# (assumes `vector_store`, `prompt`, `chain`, and `llm` are already created exactly as in your code)
 
-# -----------------------------
-# CONFIG - tune these
-# -----------------------------
-DB_DIR = "./chroma_log_db"
-LLM_MODEL = "qwen2.5:1.5b-instruct"
-EMBED_MODEL = "nomic-embed-text"
+# Tunable parameters (conservative defaults for your 8-core, 32GB CPU-only machine)
+_CHUNK_SIZE = 1000         # characters per chunk (small -> faster)
+_BATCH_SIZE = 3            # how many chunks to merge into one LLM call
+_MAX_WORKERS = max(1, min(6, (os.cpu_count() or 4) - 1))  # parallelism for summarization
+_CALL_TIMEOUT = 10         # seconds timeout per LLM call (protects pipeline)
 
-# chunk and concurrency params
-CHUNK_SIZE = 1000            # characters per chunk (small -> faster)
-MAX_WORKERS = min(6, (os.cpu_count() or 4) - 1)  # conservative parallelism
-CALL_TIMEOUT = 12            # seconds per LLM call (avoid long waits)
-BATCH_SIZE = 4               # how many chunks to merge into one LLM call if many chunks
 
-# -----------------------------
-# Initialize models & DB
-# -----------------------------
-embeddings = OllamaEmbeddings(model=EMBED_MODEL)
-
-if not os.path.exists(DB_DIR):
-    os.makedirs(DB_DIR)
-
-vector_store = Chroma(
-    collection_name="gitlab_logs",
-    persist_directory=DB_DIR,
-    embedding_function=embeddings
-)
-
-llm = OllamaLLM(model=LLM_MODEL)
-
-# -----------------------------
-# Prompts (very concise)
-# -----------------------------
-# Short prompt used for chunk-level quick summaries: ask for 1-2 sentences.
-CHUNK_PROMPT = ChatPromptTemplate.from_template(
-    "You are a concise DevOps assistant. Summarize the following log snippet in 1-2 short sentences, "
-    "focusing only on errors, warnings, status, and timing issues. Do NOT include raw logs.\n\n{logs}\n\n"
-    "Output (1-2 sentences):"
-)
-
-# Final prompt: make it a single clear paragraph with bullets (still concise).
-FINAL_PROMPT = ChatPromptTemplate.from_template(
-    "You are a senior DevOps AI assistant. Based on the combined short summaries below, produce ONE final, "
-    "concise structured summary with: Job Overview (1 line), Main Issues (bulleted), One-line recommendation. "
-    "Keep it short (3-6 lines).\n\n{logs}\n\nFinal summary:"
-)
-
-# Compose chain-like behavior using prompts and LLM
-chunk_chain = CHUNK_PROMPT | llm
-final_chain = FINAL_PROMPT | llm
-
-# -----------------------------
-# Utilities
-# -----------------------------
-def extract_relevant_lines(raw: str, keep_head_lines: int = 30, keyword_max: int = 200) -> str:
+# ---------------------------
+# Helper utilities (internal)
+# ---------------------------
+def _extract_relevant_lines(raw: str, keep_head_lines: int = 20, keyword_max: int = 300) -> str:
     """
-    Reduce log size by:
-    - always keeping the first `keep_head_lines` (to preserve job start info)
-    - keeping lines that match important keywords (ERROR, WARN, FAIL, Exception, timeout, retry, slow)
-    - limit the number of keyword lines to `keyword_max`
+    Aggressively reduce log size by:
+      - keeping the top head lines (job start metadata)
+      - including lines with keywords (error/warn/exception/timeout/retry)
+      - including lines with durations (e.g., '12.34s')
     """
     lines = raw.splitlines()
     head = lines[:keep_head_lines]
 
-    # keyword selection (case-insensitive)
-    keywords = re.compile(r"\b(error|err:|fail|exception|traceback|warn|warning|timeout|retry|segfault|killed|OOM)\b", re.I)
+    # keywords likely to indicate problems
+    keywords = re.compile(
+        r"\b(error|err:|fail|exception|traceback|warn|warning|timeout|retry|segfault|killed|OOM|fatal)\b",
+        re.I,
+    )
     relevant = [ln for ln in lines if keywords.search(ln)]
 
-    # also include lines with durations (e.g., "took 12.34s" or "seconds")
-    dur = re.compile(r"\b\d+(\.\d+)?s\b", re.I)
+    # durations like "12s" or "12.33s" or "123 ms"
+    dur = re.compile(r"\b\d+(\.\d+)?\s?(s|ms|milliseconds|sec|secs)\b", re.I)
     relevant += [ln for ln in lines if dur.search(ln) and ln not in relevant]
 
-    # dedupe while preserving order
+    # Deduplicate and keep order, limit total kept lines
     seen = set()
     filtered = []
-    for ln in head + relevant:
+    for ln in (head + relevant):
         if ln not in seen:
             seen.add(ln)
             filtered.append(ln)
         if len(filtered) >= (keep_head_lines + keyword_max):
             break
 
+    # If nothing relevant found, fallback to head + last tail chunk
+    if not filtered:
+        tail = lines[-(keep_head_lines * 2):] if len(lines) > keep_head_lines * 2 else lines
+        filtered = head + tail
+
     return "\n".join(filtered)
 
 
-def chunk_text(text: str, max_size: int = CHUNK_SIZE) -> List[str]:
-    # split safely on newlines when possible to keep chunks semantically nice
+def _chunk_text(text: str, max_size: int = _CHUNK_SIZE) -> List[str]:
+    """Create semantically nicer chunks by preferring newline splits when possible."""
+    if not text:
+        return []
     if len(text) <= max_size:
         return [text]
     chunks = []
     start = 0
-    while start < len(text):
-        end = min(len(text), start + max_size)
-        # try to break at last newline before end for nicer chunks
-        if end < len(text):
+    L = len(text)
+    while start < L:
+        end = min(L, start + max_size)
+        if end < L:
             nl = text.rfind("\n", start, end)
-            if nl > start + max_size // 3:  # break at a newline only if it's not too small
+            # prefer breaking at newline but avoid too small chunks
+            if nl and nl > start + max_size // 3:
                 end = nl + 1
         chunks.append(text[start:end])
         start = end
     return chunks
 
 
-def summarize_chunk(chunk: str) -> str:
-    """Call the chunk-level chain (wrapped to catch exceptions)."""
+def _summarize_with_chain(text: str) -> str:
+    """Sync wrapper for the chain.invoke; returns stripped string or error note."""
     try:
-        # use invoke for sync call; put short content
-        out = chunk_chain.invoke({"logs": chunk})
-        # strip and ensure concise
-        return out.strip().replace("\n", " ")
+        out = chain.invoke({"logs": text})
+        if out is None:
+            return "[empty]"
+        return str(out).strip().replace("\n", " ")
     except Exception as e:
         return f"[chunk-error: {str(e)}]"
 
 
-# -----------------------------
-# Highly-optimized summarization pipeline
-# -----------------------------
-def smart_fast_summarize(raw_logs: str, store_embeddings: bool = False) -> dict:
+# ---------------------------
+# Original function name/signature preserved
+# ---------------------------
+def summarize_logs_with_llm(raw_logs: str) -> dict:
     """
-    Fast summarizer that:
-     - filters logs to relevant lines
-     - chunks
-     - summarizes chunks in parallel with timeouts
-     - does a single final concise summary
+    Fast summarization returning a dict with key 'summary'.
+    This function preserves the original name and signature.
     """
-    t0 = time.time()
+    try:
+        start_t = time.time()
 
-    # 1) Pre-filter logs drastically to reduce tokens
-    filtered = extract_relevant_lines(raw_logs, keep_head_lines=20, keyword_max=300)
+        # 1) Pre-filter logs to relevant portion (drastically reduces tokens)
+        filtered = _extract_relevant_lines(raw_logs, keep_head_lines=20, keyword_max=300)
 
-    # If filtering yields too little, fallback to small tail of logs
-    if len(filtered.strip()) < 100:
-        # take the head + last 2000 chars
-        filtered = "\n".join(raw_logs.splitlines()[:20]) + "\n\n" + raw_logs[-2000:]
+        # If filtered is very short, use a small tail + head to preserve context
+        if len(filtered.strip()) < 120:
+            filtered = "\n".join(raw_logs.splitlines()[:20]) + "\n\n" + raw_logs[-3000:]
 
-    # 2) Optional: store embeddings for the filtered snippet only (cheap)
-    if store_embeddings:
+        # Optionally keep one stored doc in DB (similar to your previous behavior)
         try:
             vector_store.add_documents([Document(page_content=filtered[:20000])])
         except Exception:
-            pass  # do not block summarization on embedding errors
+            # embedding/storage must not block summarization speed
+            pass
 
-    # 3) Create chunks
-    chunks = chunk_text(filtered, max_size=CHUNK_SIZE)
+        # 2) Chunk filtered text
+        chunks = _chunk_text(filtered, max_size=_CHUNK_SIZE)
+        if not chunks:
+            return {"summary": "", "took_s": round(time.time() - start_t, 2)}
 
-    # If too many chunks, group them into batches to avoid too many LLM calls.
-    # Each batch will be the concatenation of up to BATCH_SIZE chunks.
-    batched_chunks = []
-    for i in range(0, len(chunks), BATCH_SIZE):
-        batch = "\n\n".join(chunks[i : i + BATCH_SIZE])
-        batched_chunks.append(batch)
+        # 3) Batch chunks to reduce number of LLM calls
+        batched = []
+        for i in range(0, len(chunks), _BATCH_SIZE):
+            batched.append("\n\n".join(chunks[i : i + _BATCH_SIZE]))
 
-    # 4) Summarize batches in parallel
-    partial_summaries = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        futures = {ex.submit(summarize_chunk, b): idx for idx, b in enumerate(batched_chunks)}
-        for fut in as_completed(futures, timeout=CALL_TIMEOUT * max(1, len(futures))):
-            try:
-                res = fut.result(timeout=CALL_TIMEOUT)
-            except Exception as e:
-                res = f"[batch-error: {str(e)}]"
-            partial_summaries.append(res)
+        # 4) Summarize batches in parallel (bounded workers)
+        partials = [None] * len(batched)
+        with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as ex:
+            future_to_idx = {ex.submit(_summarize_with_chain, b): idx for idx, b in enumerate(batched)}
+            # collect with timeouts to avoid long waits
+            for fut in as_completed(future_to_idx, timeout=max(1, _CALL_TIMEOUT * len(future_to_idx))):
+                idx = future_to_idx[fut]
+                try:
+                    partials[idx] = fut.result(timeout=_CALL_TIMEOUT)
+                except Exception as e:
+                    partials[idx] = f"[batch-error: {str(e)}]"
 
-    if not partial_summaries:
-        # fallback: single synchronous summarization on full filtered text
+        # Ensure ordered partials; fill any None by calling sync (fallback)
+        for i in range(len(partials)):
+            if partials[i] is None:
+                try:
+                    partials[i] = _summarize_with_chain(batched[i])
+                except Exception as e:
+                    partials[i] = f"[fallback-error: {str(e)}]"
+
+        # 5) Combine partials (ordered) and create one final concise summary
+        combined = "\n\n".join(partials)
+
         try:
-            final = final_chain.invoke({"logs": filtered})
-            return {"summary": final, "took_s": time.time() - t0}
+            final = chain.invoke({"logs": combined})
+            final_text = str(final).strip()
         except Exception as e:
-            return {"error": f"all-failed: {str(e)}", "took_s": time.time() - t0}
+            # fallback: try direct llm call with prompt.format if chain fails
+            try:
+                final_text = llm.invoke(prompt.format(logs=combined))
+            except Exception as e2:
+                final_text = f"[final-error: {str(e2)}]"
 
-    # keep order stable: sort by original batch index if needed
-    # (partial_summaries may be unordered if as_completed was used; we can re-run ordered)
-    # For simplicity, re-generate ordered results synchronously if len(batched_chunks) <= len(partial_summaries)
-    # But to be deterministic, we create ordered list by re-calling sequentially only when small number.
-    if len(batched_chunks) <= MAX_WORKERS:
-        ordered_partials = []
-        for b in batched_chunks:
-            ordered_partials.append(summarize_chunk(b))
-    else:
-        ordered_partials = partial_summaries  # good-enough fallback
-
-    # 5) Combine partials and do 1 final concise summary
-    combined = "\n\n".join(ordered_partials)
-    # final final summary - short and structured
-    try:
-        final = final_chain.invoke({"logs": combined})
+        took = round(time.time() - start_t, 2)
+        return {"summary": final_text, "took_s": took, "chunks": len(chunks), "batches": len(batched)}
     except Exception as e:
-        final = f"[final-error: {str(e)}]"
+        return {"error": str(e)}
 
-    took = time.time() - t0
-    return {"summary": final, "took_s": round(took, 2), "chunks": len(chunks), "batches": len(batched_chunks)}
+
+# ---------------------------
+# Streaming function preserved signature
+# ---------------------------
+def stream_summarize_logs_with_llm(raw_logs: str):
+    """
+    Streams only the final summary tokens. Internally performs fast parallel partial summarization,
+    then streams the final polished summary token-by-token from the model.
+    """
+    try:
+        # Pre-filter and chunk (same as sync function)
+        filtered = _extract_relevant_lines(raw_logs, keep_head_lines=20, keyword_max=300)
+        if len(filtered.strip()) < 120:
+            filtered = "\n".join(raw_logs.splitlines()[:20]) + "\n\n" + raw_logs[-3000:]
+
+        # optional store document (non-blocking on errors)
+        try:
+            vector_store.add_documents([Document(page_content=filtered[:20000])])
+        except Exception:
+            pass
+
+        chunks = _chunk_text(filtered, max_size=_CHUNK_SIZE)
+        if not chunks:
+            # nothing to stream
+            yield ""
+            return
+
+        # batch and create partials (synchronously here to keep worker handling simpler for streaming)
+        batched = []
+        for i in range(0, len(chunks), _BATCH_SIZE):
+            batched.append("\n\n".join(chunks[i : i + _BATCH_SIZE]))
+
+        # parallel partial summarization
+        partials = []
+        with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as ex:
+            futures = [ex.submit(_summarize_with_chain, b) for b in batched]
+            for fut in as_completed(futures, timeout=max(1, _CALL_TIMEOUT * len(futures))):
+                try:
+                    res = fut.result(timeout=_CALL_TIMEOUT)
+                except Exception as e:
+                    res = f"[batch-error: {str(e)}]"
+                partials.append(res)
+
+        # ensure ordered partials: prefer sequential recompute if ordering matters and batch count small
+        if len(batched) <= _MAX_WORKERS:
+            ordered_partials = [_summarize_with_chain(b) for b in batched]
+        else:
+            ordered_partials = partials  # best-effort order
+
+        combined = "\n\n".join(ordered_partials)
+
+        # Stream final summary token-by-token using llm.stream with formatted prompt
+        # Use prompt.format(logs=combined) to match chain prompt template
+        stream_iter = llm.stream(prompt.format(logs=combined))
+        for token in stream_iter:
+            yield token
+
+    except Exception as e:
+        yield f"[Error] {str(e)}"
