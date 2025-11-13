@@ -1,113 +1,162 @@
+import os
 import re
-from langchain_ollama import OllamaLLM
+from typing import List
+from langchain_ollama import OllamaEmbeddings, OllamaLLM
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 
-# Your existing configuration ------------------------------
+
+# ==========================================================
+# CONFIGURATION
+# ==========================================================
+DB_DIR = "./chroma_log_db"
+EMBED_MODEL = "nomic-embed-text"
+LLM_MODEL = "qwen2.5:1.5b-instruct"
+CHUNK_SIZE = 800        # Best size for logs in Chroma
+TOP_K = 6               # Retrieve only 6 best chunks → FAST
+
+
+# ==========================================================
+# INITIALIZE EMBEDDINGS
+# ==========================================================
+embeddings = OllamaEmbeddings(model=EMBED_MODEL)
+
+
+# ==========================================================
+# INITIALIZE CHROMA VECTOR STORE
+# ==========================================================
+if not os.path.exists(DB_DIR):
+    os.makedirs(DB_DIR)
 
 vector_store = Chroma(
     collection_name="gitlab_logs",
-    persist_directory="./chroma_log_db",
-    embedding_function=None
+    persist_directory=DB_DIR,
+    embedding_function=embeddings
 )
 
-llm = OllamaLLM(model="qwen2.5:1.5b-instruct")
 
+# ==========================================================
+# INITIALIZE LLM
+# ==========================================================
+llm = OllamaLLM(model=LLM_MODEL)
+
+
+# ==========================================================
+# SUMMARIZATION PROMPT
+# ==========================================================
 prompt = ChatPromptTemplate.from_template("""
-You are a senior DevOps engineer. Based on the extracted log events below,
-produce a clean and accurate summary:
+You are a senior DevOps engineer. Summarize the CI/CD job using the retrieved relevant log chunks.
 
-EXTRACTED EVENTS:
-{events}
+Relevant Context:
+{context}
 
-Provide:
-- Job Overview
-- Errors & Warnings Summary
-- What Happened (short)
-- Root Cause
-- Recommended Fix
-- One-line Summary
+Create a concise summary with:
+
+🧱 Job Overview  
+🚨 Errors & Root Cause  
+⚙️ What Happened (Short)  
+🔧 Recommended Fix  
+📘 One-Line Summary  
+
+Keep the summary clean, accurate, and **do not repeat raw logs**.
 """)
 
 chain = prompt | llm
 
 
-# ----------------------------------------------------------
-# 🔥 FAST “KEY EVENT EXTRACTOR” (Critical to speed)
-# ----------------------------------------------------------
-
-def extract_key_events(raw: str) -> str:
-    # Always convert bytes → str
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8", errors="ignore")
-
+# ==========================================================
+# CHUNKING FOR INGESTION INTO CHROMA
+# ==========================================================
+def _chunk_logs(raw: str, size: int = CHUNK_SIZE) -> List[Document]:
+    docs = []
     lines = raw.splitlines()
+    buffer = []
 
-    key = []
+    current_len = 0
+    for line in lines:
+        buffer.append(line)
+        current_len += len(line)
 
-    # 1. First ~20 lines (metadata)
-    key.extend(lines[:20])
+        if current_len >= size:
+            docs.append(Document(page_content="\n".join(buffer)))
+            buffer = []
+            current_len = 0
 
-    # 2. All error lines
-    for ln in lines:
-        if re.search(r"(error|failed|exception|fatal|traceback|oom|panic)", ln, re.I):
-            key.append(ln)
+    if buffer:
+        docs.append(Document(page_content="\n".join(buffer)))
 
-    # 3. All warnings
-    for ln in lines:
-        if re.search(r"(warning|warn:)", ln, re.I):
-            key.append(ln)
-
-    # 4. Timing and slow steps
-    for ln in lines:
-        if re.search(r"\b\d+(\.\d+)?(s|ms|sec)\b", ln, re.I):
-            key.append(ln)
-
-    # 5. Last ~30 lines (end of job)
-    key.extend(lines[-30:])
-
-    # Keep only first 120 important lines max
-    key = key[:120]
-
-    extracted = "\n".join(key)
-
-    # LIMIT input to 2000 chars MAX → critical for speed
-    return extracted[:2000]
+    return docs
 
 
-# ----------------------------------------------------------
-# 🚀 MAIN FUNCTION — FASTEST POSSIBLE
-# ----------------------------------------------------------
+# ==========================================================
+# INGEST LOGS INTO CHROMA
+# ==========================================================
+def _ingest_logs(raw_logs: str):
+    """Store logs into Chroma DB in chunks."""
+    if isinstance(raw_logs, bytes):
+        raw_logs = raw_logs.decode("utf-8", errors="ignore")
 
+    docs = _chunk_logs(raw_logs, CHUNK_SIZE)
+    if docs:
+        vector_store.add_documents(docs)
+
+
+# ==========================================================
+# RETRIEVE RELEVANT CONTEXT FROM CHROMA
+# ==========================================================
+def _retrieve_context() -> str:
+    """Semantic search retrieves ONLY relevant meaningful chunks."""
+    results = vector_store.similarity_search("summarize logs", k=TOP_K)
+    if not results:
+        return "No context retrieved."
+    return "\n\n".join([doc.page_content for doc in results])
+
+
+# ==========================================================
+# MAIN SUMMARIZATION FUNCTION (KEEP SIGNATURE)
+# ==========================================================
 def summarize_logs_with_llm(raw_logs: str) -> dict:
+    """
+    Your original function name.
+    Now implemented as a FAST RAG summarizer.
+    """
+
     try:
-        events = extract_key_events(raw_logs)
+        # 1. Ingest into Chroma
+        _ingest_logs(raw_logs)
 
-        # Save small piece in vector db
-        try:
-            vector_store.add_documents([Document(page_content=events)])
-        except:
-            pass
+        # 2. Retrieve semantic context
+        context = _retrieve_context()
 
-        final = chain.invoke({"events": events})
+        # 3. ONE fast LLM call
+        final = chain.invoke({"context": context})
 
-        return {"summary": final}
+        return {
+            "summary": str(final).strip(),
+            "context_size": len(context),
+            "chunks_used": TOP_K
+        }
 
     except Exception as e:
         return {"error": str(e)}
 
 
-# ----------------------------------------------------------
-# 🚀 STREAM VERSION — ONLY FINAL SUMMARY
-# ----------------------------------------------------------
-
+# ==========================================================
+# STREAMING VERSION (KEEP SIGNATURE)
+# ==========================================================
 def stream_summarize_logs_with_llm(raw_logs: str):
-    try:
-        events = extract_key_events(raw_logs)
+    """
+    Streaming version of your original function.
+    Streams ONLY the final summary.
+    """
 
-        for t in llm.stream(prompt.format(events=events)):
-            yield t
+    try:
+        _ingest_logs(raw_logs)
+        context = _retrieve_context()
+
+        for token in llm.stream(prompt.format(context=context)):
+            yield token
 
     except Exception as e:
         yield f"[Error] {str(e)}"
